@@ -1,0 +1,20 @@
+# Configuration API FastAPI
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false            # True uniquement en dev
+
+auth:
+  algorithm: HS256
+  token_expire_minutes: 60
+  roles: [admin, analyst, viewer]
+
+rate_limiting:
+  requests_per_minute: 60
+  burst: 10
+
+cors:
+  origins: ["http://localhost:3000"]  # Ajouter le domaine prod
+  methods: ["GET", "POST", "PUT", "DELETE"]

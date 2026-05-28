@@ -1,0 +1,27 @@
+# Configuration des agents LangGraph
+
+llm:
+  model: claude-sonnet-4-20250514
+  max_tokens: 4096
+  temperature: 0.1         # Bas pour la précision
+
+supervisor:
+  max_iterations: 10
+  timeout_seconds: 120
+
+rag:
+  collection_name: documents
+  top_k: 5
+  rerank: true
+  chunk_size: 512
+  chunk_overlap: 50
+  embedding_model: text-embedding-3-small
+
+memory:
+  short_term: langgraph_store
+  long_term: mem0
+  summary_threshold: 20    # Résumer après N messages
+
+evaluation:
+  judge_model: claude-sonnet-4-20250514
+  metrics: [faithfulness, relevance, completeness]

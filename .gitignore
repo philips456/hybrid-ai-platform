@@ -1,0 +1,47 @@
+# Environnement Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+*.egg-info/
+
+# Données (jamais commitées)
+data/raw/*
+data/processed/*
+data/embeddings/*
+data/external/*
+!data/**/.gitkeep
+
+# Modèles (lourds, gérés par MLflow)
+models/registry/*
+models/exports/*
+models/checkpoints/*
+!models/**/.gitkeep
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Secrets
+configs/.env
+configs/secrets.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Tests
+.coverage
+htmlcov/
+.pytest_cache/
