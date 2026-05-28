@@ -11,15 +11,15 @@ pydantic-settings==2.3.4
 pyyaml==6.0.1
 
 # ── DEEP LEARNING ─────────────────────────────────────
-tensorflow==2.16.1
+tensorflow
 keras==3.3.3
 scikit-learn==1.5.0
 numpy==1.26.4
 pandas==2.2.2
 scipy==1.13.1
-onnx==1.16.1
-onnxruntime==1.18.0
-tf2onnx==1.16.1
+onnx
+onnxruntime
+tf2onnx
 
 # ── LLM AGENTS ────────────────────────────────────────
 langchain==0.2.5
@@ -31,7 +31,7 @@ anthropic==0.28.0
 
 # ── RAG & VECTOR DB ───────────────────────────────────
 qdrant-client==1.9.1
-openai==1.35.3              # Pour text-embedding-3-small
+openai              # Pour text-embedding-3-small
 tiktoken==0.7.0
 sentence-transformers==3.0.1
 
@@ -42,7 +42,7 @@ asyncpg==0.29.0
 psycopg2-binary==2.9.9
 
 # ── MEMORY ────────────────────────────────────────────
-mem0ai==0.0.66
+mem0ai
 
 # ── MLOPS ─────────────────────────────────────────────
 mlflow==2.13.2
