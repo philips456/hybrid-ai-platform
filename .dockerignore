@@ -1,0 +1,50 @@
+# ══════════════════════════════════════════════════════
+# .dockerignore — Exclure de l'image Docker
+# ══════════════════════════════════════════════════════
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Data (jamais dans l'image)
+data/raw/
+data/processed/
+data/embeddings/
+data/external/
+
+# Modèles lourds
+models/registry/
+models/checkpoints/
+
+# Développement
+.git/
+.gitignore
+notebooks/
+docs/
+tests/
+*.md
+Makefile
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Secrets
+configs/.env
+configs/secrets.yaml
+
+# Logs
+logs/
+*.log
+mlruns/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

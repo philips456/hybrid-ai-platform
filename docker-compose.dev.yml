@@ -1,0 +1,85 @@
+# ══════════════════════════════════════════════════════
+# docker-compose.dev.yml — Environnement de développement
+# Usage : docker-compose -f docker-compose.dev.yml up -d
+# ══════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+
+  # Infrastructure identique à la prod
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: hybrid_ai_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hybrid_ai_db_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: changeme
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    networks:
+      - hybrid_ai_dev
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.4
+    container_name: hybrid_ai_qdrant_dev
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_dev_data:/qdrant/storage
+    networks:
+      - hybrid_ai_dev
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.2
+    container_name: hybrid_ai_mlflow_dev
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_dev_artifacts:/mlflow/artifacts
+      - ./mlruns:/mlflow/mlruns
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlruns/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    networks:
+      - hybrid_ai_dev
+
+  # API avec hot reload
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: hybrid_ai_api_dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - configs/.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: hybrid_ai_db_dev
+      QDRANT_HOST: qdrant
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - .:/app          # Mount complet pour hot reload
+    depends_on:
+      - postgres
+      - qdrant
+      - mlflow
+    networks:
+      - hybrid_ai_dev
+
+volumes:
+  postgres_dev_data:
+  qdrant_dev_data:
+  mlflow_dev_artifacts:
+
+networks:
+  hybrid_ai_dev:
+    driver: bridge
