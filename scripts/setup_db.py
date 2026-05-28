@@ -69,7 +69,7 @@ async def create_indexes(engine):
         "CREATE INDEX IF NOT EXISTS idx_anomalies_status_time ON anomalies (status, timestamp DESC);",
         "CREATE INDEX IF NOT EXISTS idx_alerts_unprocessed ON alerts (is_processed, created_at DESC) WHERE is_processed = FALSE;",
         "CREATE INDEX IF NOT EXISTS idx_agent_runs_type_time ON agent_runs (agent_type, created_at DESC);",
-        "CREATE INDEX IF NOT EXISTS idx_feedback_pending ON feedback_suggestions (status, created_at DESC) WHERE status = 'pending';",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_pending ON feedback_suggestions (status, created_at DESC) WHERE status = 'PENDING'::feedbackstatus;",
     ]
     async with engine.begin() as conn:
         for idx_sql in indexes:
@@ -79,15 +79,14 @@ async def create_indexes(engine):
 
 async def insert_default_admin(engine):
     print("👤 Création de l'utilisateur admin...")
-    from passlib.context import CryptContext
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    import bcrypt
     async with engine.begin() as conn:
         result = await conn.execute(text("SELECT COUNT(*) FROM users WHERE username = 'admin'"))
         if result.scalar() == 0:
-            hashed = pwd_context.hash("admin123")
+            hashed = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             await conn.execute(text("""
                 INSERT INTO users (id, username, email, hashed_password, role, is_active)
-                VALUES (uuid_generate_v4(), 'admin', 'admin@hybrid-ai-platform.local', :pwd, 'admin', TRUE)
+                VALUES (uuid_generate_v4(), 'admin', 'admin@hybrid-ai-platform.local', :pwd, 'ADMIN', TRUE)
             """), {"pwd": hashed})
             print("   ✅ Admin créé (user: admin / pass: admin123)")
             print("   ⚠️  Changer le mot de passe en production !")
@@ -102,7 +101,7 @@ async def insert_synthetic_source(engine):
         if result.scalar() == 0:
             await conn.execute(text("""
                 INSERT INTO data_sources (id, name, domain, source_type, is_active)
-                VALUES (uuid_generate_v4(), 'synthetic_test', 'synthetic', 'synthetic', TRUE)
+                VALUES (uuid_generate_v4(), 'synthetic_test', 'SYNTHETIC', 'synthetic', TRUE)
             """))
             print("   ✅ Source synthétique créée")
         else:
