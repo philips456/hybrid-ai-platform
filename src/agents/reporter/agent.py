@@ -7,6 +7,7 @@ import json
 import logging
 
 import anthropic
+from sympy import content
 
 from configs.settings import settings
 from src.agents.context.builder import ContextBuilder
@@ -125,10 +126,10 @@ class ReporterAgent:
                 messages=[{"role": "user", "content": human}],
             )
             content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
+            if "```" in content:
+               lines = content.split("\n")
+               lines = [l for l in lines if not l.strip().startswith("```")]
+               content = "\n".join(lines).strip()
             return json.loads(content)
         except Exception as e:
             logger.error(f"Report generation failed: {e}")
@@ -148,10 +149,11 @@ class ReporterAgent:
                 messages=[{"role": "user", "content": judge_prompt}],
             )
             content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
+            if "```" in content:
+               lines = content.split("\n")
+               lines = [l for l in lines if not l.strip().startswith("```")]
+               content = "\n".join(lines).strip()
+            return json.loads(content)
             return json.loads(content)
         except Exception as e:
             logger.error(f"Report evaluation failed: {e}")

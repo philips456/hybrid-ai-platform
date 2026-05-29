@@ -126,7 +126,7 @@ class FeedbackLoop:
             rag_documents=rag_documents or [],
             anomaly_history=anomaly_history,
             previous_suggestions=previous_suggestions,
-            use_reflexion=True,
+            use_reflexion=False,
         )
 
         # Store in short-term memory

@@ -38,18 +38,21 @@ Before finalizing each suggestion, ask yourself:
 4. Is the justification specific and data-driven?
 
 OUTPUT FORMAT:
-Respond ONLY with a valid JSON array of FeedbackSuggestion objects:
+Your response must start with [ and end with ].
+No explanation. No text before or after. No markdown. No backticks.
+Raw JSON array only.
+
 [
   {{
-    "hyperparameter": "string (e.g. learning_rate, window_size, dropout_rate)",
-    "current_value": "string",
-    "suggested_value": "string",
-    "justification": "string (must reference specific metrics from the context)",
-    "confidence_score": float (0.0 to 1.0)
+    "hyperparameter": "learning_rate",
+    "current_value": "0.001",
+    "suggested_value": "0.0005",
+    "justification": "RMSE=0.18 exceeded threshold=0.15 for 6 consecutive periods",
+    "confidence_score": 0.85
   }}
 ]
 
-If no adjustment is needed, respond with an empty array: []
+If no adjustment needed: []
 """
 
 ANALYST_REFLEXION_PROMPT = """Review your previous suggestions:
@@ -63,4 +66,7 @@ Apply the Reflexion protocol:
 
 If your suggestions are sound, output them unchanged.
 If not, revise and output the corrected JSON array.
+
+Your response must start with [ and end with ].
+No explanation. No text before or after. Raw JSON array only.
 """

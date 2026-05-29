@@ -107,10 +107,10 @@ class ResearcherAgent:
                 messages=[{"role": "user", "content": human}],
             )
             content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
+            if "```" in content:
+               lines = content.split("\n")
+               lines = [l for l in lines if not l.strip().startswith("```")]
+               content = "\n".join(lines).strip()
             return json.loads(content)
         except Exception as e:
             logger.error(f"ResearcherAgent synthesis failed: {e}")

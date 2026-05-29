@@ -36,7 +36,7 @@ class RAGPipeline:
     """
 
     COLLECTION_NAME = "hybrid_ai_documents"
-    EMBEDDING_MODEL = "text-embedding-3-small"
+    EMBEDDING_MODEL = settings.openai_embedding_model
     EMBEDDING_DIM = 1536
     TOP_K = 10
     RETURN_K = 3
@@ -46,7 +46,7 @@ class RAGPipeline:
             host=settings.qdrant_host,
             port=settings.qdrant_port,
         )
-        self.openai = OpenAI(api_key=settings.anthropic_api_key)
+        self.openai = OpenAI(api_key=settings.openai_api_key)
         self.reranker = DocumentReranker()
         self._ensure_collection()
 

@@ -9,7 +9,9 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_model: str = "claude-sonnet-4-20250514" 
+    openai_api_key: str = ""
+    openai_embedding_model: str = "text-embedding-3-small"
 
     # Base de données
     database_url: str = "postgresql://postgres:changeme@localhost:5432/hybrid_ai_db"
@@ -58,4 +60,4 @@ def get_settings() -> Settings:
     return Settings()
 
 
-settings = get_settings()
+settings = get_settings()  

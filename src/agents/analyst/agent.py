@@ -31,7 +31,7 @@ class AnalystAgent:
 
     Usage:
         agent = AnalystAgent(domain="telecom")
-        suggestions = await agent.analyze(
+        suggestions = agent.analyze(
             metrics={"rmse": 0.18, "consecutive_periods": 6},
             model_config={...},
             rag_documents=[...],
@@ -109,24 +109,31 @@ class AnalystAgent:
         )
         return final_suggestions
 
+    def _clean_json(self, content: str) -> str:
+        """Removes markdown backticks from LLM response."""
+        content = content.strip()
+        if "```" in content:
+            lines = content.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            content = "\n".join(lines).strip()
+        return content
+
     def _call_llm(self, system: str, human: str) -> list[dict]:
-        """Calls Claude and parses JSON response."""
+        """Calls Claude with prefill to force JSON array output."""
+        content = ""
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=2048,
                 temperature=0.1,
                 system=system,
-                messages=[{"role": "user", "content": human}],
+                messages=[
+                    {"role": "user", "content": human},
+                    {"role": "assistant", "content": "["},
+                ],
             )
-            content = response.content[0].text.strip()
-
-            # Parse JSON response
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-
+            # Prepend the prefill bracket back
+            content = "[" + self._clean_json(response.content[0].text)
             suggestions = json.loads(content)
             if not isinstance(suggestions, list):
                 suggestions = [suggestions]
@@ -134,6 +141,7 @@ class AnalystAgent:
 
         except json.JSONDecodeError as e:
             logger.error(f"AnalystAgent: JSON parse error: {e}")
+            logger.error(f"AnalystAgent: raw content: {content[:300]}")
             return []
         except Exception as e:
             logger.error(f"AnalystAgent: LLM call failed: {e}")

@@ -127,3 +127,29 @@ volumes:
 networks:
   hybrid_ai_network:
     driver: bridge
+ 
+
+streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: hybrid_ai_streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    env_file:
+      - configs/.env
+    environment:
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - .:/app
+    depends_on:
+      - api
+    command: >
+      streamlit run src/dashboard/app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+    networks:
+      - hybrid_ai_network
