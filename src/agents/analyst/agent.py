@@ -32,10 +32,15 @@ class AnalystAgent:
     2. submit_feedback_suggestion — propose adjustments via Tool Use
     3. SuggestionValidator — validate bounds and confidence
     4. Optional Reflexion — self-critique
+
+    Performance note:
+    detect_anomaly_type adds ~30s (1 extra LLM call).
+    Set enable_classification=False for faster demo responses.
     """
 
-    def __init__(self, domain: str = "synthetic"):
+    def __init__(self, domain: str = "synthetic", enable_classification: bool = False):
         self.domain = domain
+        self.enable_classification = enable_classification
         self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         self.context_builder = ContextBuilder(agent_type="analyst")
         self.validator = SuggestionValidator(min_confidence=0.5, strict_mode=False)
@@ -70,47 +75,65 @@ class AnalystAgent:
 
         system_prompt = ANALYST_SYSTEM_PROMPT.format(domain=self.domain)
 
-        # Step 1: Classify anomaly type
-        logger.info("AnalystAgent: classifying anomaly type")
-        classification = self._detect_anomaly_type(
-            system=system_prompt,
-            human=context.build(),
-        )
-        if classification:
-            logger.info(
-                f"AnalystAgent: type={classification.get('anomaly_type')} "
-                f"severity={classification.get('severity')} "
-                f"root_cause={classification.get('root_cause_hypothesis', '')[:60]}"
+        # Step 1: Classify anomaly type (optional — adds ~30s)
+        classification = {}
+        if self.enable_classification:
+            logger.info("AnalystAgent: classifying anomaly type")
+            classification = self._detect_anomaly_type(
+                system=system_prompt,
+                human=context.build(),
             )
+            if classification:
+                logger.info(
+                    f"AnalystAgent: type={classification.get('anomaly_type')} "
+                    f"severity={classification.get('severity')} "
+                    f"root_cause={classification.get('root_cause_hypothesis', '')[:60]}"
+                )
+        else:
+            logger.info("AnalystAgent: classification disabled — skipping detect_anomaly_type")
 
         # Step 2: Generate suggestions via Tool Use
         logger.info("AnalystAgent: generating suggestions via Tool Use")
         enriched = self._enrich_context_with_classification(context.build(), classification)
         raw_suggestions = self._call_llm_with_tools(system=system_prompt, human=enriched)
 
-        # Step 3: Validate suggestions
-        valid_suggestions = self.validator.filter_valid(raw_suggestions)
+        # Step 3: Validate — add metadata, keep all suggestions for HITL
+        validation_results = self.validator.validate_all(raw_suggestions)
+        enriched_suggestions = []
+        for result in validation_results:
+            s = result.suggestion.copy()
+            s["validation_issues"] = result.issues
+            s["validation_warnings"] = result.warnings
+            s["pre_validated"] = result.is_valid
+            s["anomaly_classification"] = classification
+            enriched_suggestions.append(s)
+
+        valid_count = sum(1 for r in validation_results if r.is_valid)
         logger.info(
             f"AnalystAgent: {len(raw_suggestions)} generated, "
-            f"{len(valid_suggestions)} passed validation"
+            f"{valid_count} pre-validated, all sent to HITL"
         )
 
-        # Add validation metadata to each suggestion
-        for suggestion in valid_suggestions:
-            suggestion["anomaly_classification"] = classification or {}
-
-        if not valid_suggestions or not use_reflexion:
-            return valid_suggestions
+        if not enriched_suggestions or not use_reflexion:
+            return enriched_suggestions
 
         # Step 4: Reflexion self-critique
         logger.info("AnalystAgent: applying Reflexion self-critique")
         reflexion_prompt = ANALYST_REFLEXION_PROMPT.format(
-            previous_suggestions=json.dumps(valid_suggestions, indent=2)
+            previous_suggestions=json.dumps(enriched_suggestions, indent=2)
         )
         refined = self._call_llm_with_tools(system=system_prompt, human=reflexion_prompt)
-        final = self.validator.filter_valid(refined)
+        final_results = self.validator.validate_all(refined)
+        final = []
+        for result in final_results:
+            s = result.suggestion.copy()
+            s["validation_issues"] = result.issues
+            s["validation_warnings"] = result.warnings
+            s["pre_validated"] = result.is_valid
+            s["anomaly_classification"] = classification
+            final.append(s)
 
-        logger.info(f"AnalystAgent: {len(final)} suggestions after Reflexion + validation")
+        logger.info(f"AnalystAgent: {len(final)} suggestions after Reflexion")
         return final
 
     def _detect_anomaly_type(self, system: str, human: str) -> dict:

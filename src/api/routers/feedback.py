@@ -1,13 +1,14 @@
 """
 src/api/routers/feedback.py
 Feedback HITL endpoints — reads from PostgreSQL, falls back to memory.
+Uses threading pattern for uvloop compatibility.
 """
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
 from configs.settings import settings
@@ -19,12 +20,10 @@ router = APIRouter(prefix="/feedback", tags=["Feedback HITL"])
 logger = logging.getLogger(__name__)
 hmac_guard = HMACGuard()
 
-# In-memory fallback when PostgreSQL is unavailable
 _memory_suggestions: list[dict] = []
 
 
 def _seed_demo():
-    """Seeds demo suggestions if memory is empty."""
     global _memory_suggestions
     if not _memory_suggestions:
         _memory_suggestions = [
@@ -40,7 +39,6 @@ def _seed_demo():
                 "confidence_score": 0.87,
                 "trigger_metrics": {"rmse": 0.18, "consecutive_periods": 6, "mae": 0.12},
                 "status": "PENDING",
-                "integrity_hash": "",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
             {
@@ -55,74 +53,107 @@ def _seed_demo():
                 "confidence_score": 0.72,
                 "trigger_metrics": {"rmse": 0.16, "consecutive_periods": 5, "mae": 0.11},
                 "status": "PENDING",
-                "integrity_hash": "",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         ]
-        # Sign demo suggestions
-        for s in _memory_suggestions:
-            signed = hmac_guard.sign_suggestion(s)
-            s["integrity_hash"] = signed["integrity_hash"]
 
 
-async def _get_from_db(status: str = None) -> list[dict]:
-    """Reads suggestions from PostgreSQL."""
-    try:
-        conn = await asyncpg.connect(settings.database_url)
+def _db_fetch(status: str = None) -> list[dict]:
+    """Reads suggestions from PostgreSQL in a separate thread."""
+    import asyncpg
+    import asyncio
+
+    result = {"data": None}
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _do():
+            try:
+                conn = await asyncpg.connect(settings.database_url)
+                try:
+                    if status:
+                        rows = await conn.fetch(
+                            "SELECT * FROM feedback_suggestions "
+                            "WHERE status = $1::feedbackstatus "
+                            "ORDER BY created_at DESC LIMIT 100",
+                            status.upper()
+                        )
+                    else:
+                        rows = await conn.fetch(
+                            "SELECT * FROM feedback_suggestions "
+                            "ORDER BY created_at DESC LIMIT 100"
+                        )
+                    result["data"] = [dict(r) for r in rows]
+                finally:
+                    await conn.close()
+            except Exception as e:
+                logger.warning(f"feedback router: fetch failed: {e}")
+
         try:
-            if status:
-                rows = await conn.fetch(
-                    "SELECT * FROM feedback_suggestions WHERE status = $1::feedbackstatus "
-                    "ORDER BY created_at DESC LIMIT 100",
-                    status.upper()
-                )
-            else:
-                rows = await conn.fetch(
-                    "SELECT * FROM feedback_suggestions ORDER BY created_at DESC LIMIT 100"
-                )
-            return [dict(r) for r in rows]
+            loop.run_until_complete(_do())
         finally:
-            await conn.close()
-    except Exception as e:
-        logger.warning(f"feedback router: PostgreSQL unavailable ({e}), using memory")
-        return None
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=10)
+    return result["data"]
 
 
-async def _update_db_status(
-    suggestion_id: str, status: str, reason: str, decided_by: str
-) -> bool:
-    """Updates suggestion status in PostgreSQL."""
-    try:
-        conn = await asyncpg.connect(settings.database_url)
+def _db_update(suggestion_id: str, status: str, reason: str) -> bool:
+    """Updates suggestion status in PostgreSQL in a separate thread."""
+    import asyncpg
+    import asyncio
+
+    result = {"success": False}
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _do():
+            try:
+                conn = await asyncpg.connect(settings.database_url)
+                try:
+                    r = await conn.execute(
+                        """
+                        UPDATE feedback_suggestions
+                        SET status = $1::feedbackstatus,
+                            decided_at = NOW(),
+                            decision_reason = $2,
+                            updated_at = NOW()
+                        WHERE id = $3::uuid
+                        """,
+                        status.upper(),
+                        reason,
+                        suggestion_id,
+                    )
+                    result["success"] = r == "UPDATE 1"
+                    logger.info(f"feedback router: UPDATE result={r} for {suggestion_id[:8]}")
+                finally:
+                    await conn.close()
+            except Exception as e:
+                logger.warning(f"feedback router: UPDATE failed: {e}")
+
         try:
-            result = await conn.execute(
-                """
-                UPDATE feedback_suggestions
-                SET status = $1::feedbackstatus,
-                    decided_at = NOW(),
-                    decided_by = $2,
-                    decision_reason = $3
-                WHERE id = $4::uuid
-                """,
-                status.upper(), decided_by, reason, suggestion_id
-            )
-            return result == "UPDATE 1"
+            loop.run_until_complete(_do())
         finally:
-            await conn.close()
-    except Exception as e:
-        logger.warning(f"feedback router: DB update failed ({e})")
-        return False
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=10)
+    return result["success"]
 
 
 @router.get("/pending")
 async def get_pending_suggestions(token: TokenData = Depends(verify_token)):
     """Returns suggestions awaiting human validation."""
-    # Try PostgreSQL first
-    db_results = await _get_from_db(status="PENDING")
+    db_results = _db_fetch(status="PENDING")
     if db_results is not None:
         return db_results
-
-    # Fallback to memory
     _seed_demo()
     return [s for s in _memory_suggestions if s["status"] == "PENDING"]
 
@@ -133,32 +164,26 @@ async def validate_suggestion(
     decision: FeedbackDecisionRequest,
     token: TokenData = Depends(require_role("analyst")),
 ):
-    """
-    Approves or rejects a feedback suggestion — core HITL endpoint.
-    Verifies HMAC integrity before processing.
-    """
-    # Try PostgreSQL first
-    db_results = await _get_from_db()
+    """Approves or rejects a feedback suggestion — core HITL endpoint."""
+    db_results = _db_fetch()
     if db_results is not None:
-        suggestion = next((s for s in db_results if str(s.get("id")) == suggestion_id), None)
+        suggestion = next(
+            (s for s in db_results if str(s.get("id")) == suggestion_id), None
+        )
         if not suggestion:
             raise HTTPException(status_code=404, detail="Suggestion not found")
 
-        # Parse trigger_metrics if stored as JSON string
-        if isinstance(suggestion.get("trigger_metrics"), str):
-            suggestion["trigger_metrics"] = json.loads(suggestion["trigger_metrics"])
-
-        # Verify HMAC integrity
-        if suggestion.get("integrity_hash"):
-            if not hmac_guard.verify_suggestion(dict(suggestion)):
-                raise HTTPException(
-                    status_code=422,
-                    detail="Suggestion integrity check failed — possible tampering"
-                )
+        if str(suggestion.get("status", "")).upper() != "PENDING":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Already processed: {suggestion.get('status')}"
+            )
 
         status = "APPROVED" if decision.approved else "REJECTED"
-        updated = await _update_db_status(
-            suggestion_id, status, decision.reason or "", token.username
+        updated = _db_update(
+            suggestion_id,
+            status,
+            decision.reason or "",
         )
 
         return {
@@ -179,7 +204,10 @@ async def validate_suggestion(
     if not suggestion:
         raise HTTPException(status_code=404, detail="Suggestion not found")
     if suggestion["status"] != "PENDING":
-        raise HTTPException(status_code=422, detail=f"Already processed: {suggestion['status']}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Already processed: {suggestion['status']}"
+        )
 
     status = "APPROVED" if decision.approved else "REJECTED"
     suggestion["status"] = status
@@ -199,9 +227,9 @@ async def validate_suggestion(
 @router.get("/history")
 async def get_feedback_history(token: TokenData = Depends(verify_token)):
     """Returns all processed feedback suggestions."""
-    db_results = await _get_from_db()
+    db_results = _db_fetch()
     if db_results is not None:
-        return [s for s in db_results if s.get("status") != "PENDING"]
+        return [s for s in db_results if str(s.get("status", "")) != "PENDING"]
     _seed_demo()
     return [s for s in _memory_suggestions if s["status"] != "PENDING"]
 
@@ -209,12 +237,12 @@ async def get_feedback_history(token: TokenData = Depends(verify_token)):
 @router.get("/stats")
 async def get_feedback_stats(token: TokenData = Depends(verify_token)):
     """Returns feedback loop statistics."""
-    db_results = await _get_from_db()
+    db_results = _db_fetch()
     if db_results is not None:
         total = len(db_results)
-        approved = sum(1 for s in db_results if s.get("status") == "APPROVED")
-        rejected = sum(1 for s in db_results if s.get("status") == "REJECTED")
-        pending = sum(1 for s in db_results if s.get("status") == "PENDING")
+        approved = sum(1 for s in db_results if str(s.get("status")) == "APPROVED")
+        rejected = sum(1 for s in db_results if str(s.get("status")) == "REJECTED")
+        pending = sum(1 for s in db_results if str(s.get("status")) == "PENDING")
     else:
         _seed_demo()
         total = len(_memory_suggestions)

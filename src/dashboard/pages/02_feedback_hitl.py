@@ -6,6 +6,7 @@ Shows ALL suggestions with validation metadata.
 Human decides even when validator flagged issues.
 Rejection reasons stored in LongTermMemory.
 """
+import json
 import streamlit as st
 from src.dashboard.components.api_client import (
     get_pending_feedback, get_feedback_stats, validate_feedback
@@ -62,7 +63,7 @@ else:
         validation_warnings = suggestion.get("validation_warnings", [])
         anomaly_class = suggestion.get("anomaly_classification", {})
 
-        # Color based on validation status
+        # Color based on confidence
         if not pre_validated:
             conf_icon = "🔴"
         elif confidence >= 0.8:
@@ -81,19 +82,17 @@ else:
                     f"— Confidence: {confidence:.0%}"
                 )
 
-                # Validation issues — shown as warning, not blocker
+                # Validation issues
                 if validation_issues:
                     st.error(
                         f"⚠️ Validator flagged issues: {' | '.join(validation_issues)}\n\n"
                         f"You can still approve — your judgment overrides the validator."
                     )
                 if validation_warnings:
-                    st.warning(
-                        f"💡 Warnings: {' | '.join(validation_warnings)}"
-                    )
+                    st.warning(f"💡 Warnings: {' | '.join(validation_warnings)}")
 
-                # Anomaly classification from detect_anomaly_type tool
-                if anomaly_class:
+                # Anomaly classification
+                if anomaly_class and isinstance(anomaly_class, dict):
                     st.info(
                         f"**Anomaly type:** {anomaly_class.get('anomaly_type', 'N/A')} | "
                         f"**Severity:** {anomaly_class.get('severity', 'N/A')} | "
@@ -108,13 +107,20 @@ else:
                 st.markdown("**Agent Justification:**")
                 st.info(suggestion.get("justification", "No justification provided"))
 
+                # Parse trigger_metrics — may be string from PostgreSQL
                 trigger = suggestion.get("trigger_metrics", {})
-                if trigger:
+                if isinstance(trigger, str):
+                    try:
+                        trigger = json.loads(trigger)
+                    except Exception:
+                        trigger = {}
+
+                if trigger and isinstance(trigger, dict) and len(trigger) > 0:
                     st.markdown("**Trigger Metrics:**")
                     metric_cols = st.columns(len(trigger))
                     for i, (k, v) in enumerate(trigger.items()):
                         metric_cols[i].metric(
-                            k, f"{v:.3f}" if isinstance(v, float) else v
+                            k, f"{v:.3f}" if isinstance(v, float) else str(v)
                         )
 
             with col2:
@@ -165,7 +171,7 @@ else:
                             st.error(f"Error: {result['error']}")
 
             st.caption(
-                f"ID: {suggestion['id'][:8]}... | "
-                f"Created: {suggestion.get('created_at', 'N/A')[:19]} | "
+                f"ID: {str(suggestion.get('id', ''))[:8]}... | "
+                f"Created: {str(suggestion.get('created_at', ''))[:19]} | "
                 f"Pre-validated: {'✅' if pre_validated else '⚠️'}"
             )

@@ -119,7 +119,7 @@ def run_agent(task: str, metrics: dict = None) -> dict:
             f"{API_BASE}/agents/run",
             headers=get_headers(),
             json={"task": task, "metrics": metrics or {}},
-            timeout=60,
+            timeout=120,
         )
         return resp.json() if resp.status_code == 200 else {"error": resp.text}
     except Exception as e:
