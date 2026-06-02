@@ -205,3 +205,16 @@ class SupervisorGraph:
                 )
 
         return state
+
+
+# MLflow autolog — traces all agent calls automatically
+# Based on MLflow LangChain integration
+try:
+    import mlflow
+    mlflow.langchain.autolog(
+        log_input_examples=False,  # Don't log sensitive data
+        log_model_signatures=True,
+        log_models=False,
+    )
+except Exception:
+    pass  # MLflow optional — graceful degradation

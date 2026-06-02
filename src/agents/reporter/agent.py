@@ -1,13 +1,15 @@
 """
 src/agents/reporter/agent.py
-ReporterAgent — generates and self-evaluates structured reports.
-Implements LLM-as-a-judge (Aggarwal et al., KDD 2025).
+ReporterAgent — generates structured reports using Anthropic Tool Use.
+
+Implements:
+- Tool Use for reliable structured output (Dang et al., arXiv:2509.18076)
+- LLM-as-a-judge evaluation (Aggarwal et al., KDD 2025)
 """
 import json
 import logging
 
 import anthropic
-from sympy import content
 
 from configs.settings import settings
 from src.agents.context.builder import ContextBuilder
@@ -18,22 +20,100 @@ logger = logging.getLogger(__name__)
 MIN_QUALITY_SCORE = 0.8
 MAX_REGENERATION_ATTEMPTS = 2
 
+SUBMIT_REPORT_TOOL = {
+    "name": "submit_report",
+    "description": "Submit a structured analysis report based on findings.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": "Report title",
+            },
+            "report_type": {
+                "type": "string",
+                "description": "anomaly_analysis | performance | feedback_suggestion",
+            },
+            "summary": {
+                "type": "string",
+                "description": "2-3 sentence executive summary",
+            },
+            "findings": {
+                "type": "array",
+                "description": "List of findings with evidence and severity",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "finding": {"type": "string"},
+                        "evidence": {"type": "string"},
+                        "severity": {"type": "string"},
+                    },
+                    "required": ["finding", "evidence", "severity"],
+                },
+            },
+            "recommendations": {
+                "type": "array",
+                "description": "List of recommendations with rationale and priority",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "priority": {"type": "string"},
+                    },
+                    "required": ["action", "rationale", "priority"],
+                },
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Overall confidence score between 0.0 and 1.0",
+            },
+        },
+        "required": ["title", "report_type", "summary", "findings", "recommendations", "confidence"],
+    },
+}
+
+JUDGE_TOOL = {
+    "name": "submit_evaluation",
+    "description": "Submit quality evaluation scores for a report.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "faithfulness": {
+                "type": "number",
+                "description": "0.0-1.0: Are all claims grounded in the context?",
+            },
+            "relevance": {
+                "type": "number",
+                "description": "0.0-1.0: Does the report address the actual question?",
+            },
+            "completeness": {
+                "type": "number",
+                "description": "0.0-1.0: Are all key findings captured?",
+            },
+            "overall": {
+                "type": "number",
+                "description": "0.0-1.0: Overall quality score",
+            },
+            "approved": {
+                "type": "boolean",
+                "description": "True if overall >= 0.8",
+            },
+            "issues": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of issues found (empty if approved)",
+            },
+        },
+        "required": ["faithfulness", "relevance", "completeness", "overall", "approved", "issues"],
+    },
+}
+
 
 class ReporterAgent:
     """
-    Generates structured reports and evaluates them via LLM-as-a-judge.
-
-    If quality score < 0.8, the report is regenerated automatically.
-    Maximum 2 regeneration attempts before returning best available report.
-
-    Usage:
-        agent = ReporterAgent(domain="telecom")
-        report = agent.generate_report(
-            analysis_result={...},
-            research_result={...},
-            anomaly_data={...},
-            report_type="anomaly_analysis"
-        )
+    Generates structured reports using Tool Use + LLM-as-a-judge.
+    Tool Use ensures 99.8% schema compliance — no JSON parsing needed.
     """
 
     def __init__(self, domain: str = "synthetic"):
@@ -49,25 +129,13 @@ class ReporterAgent:
         anomaly_data: dict,
         report_type: str = "anomaly_analysis",
     ) -> dict:
-        """
-        Generates a report and validates it with LLM-as-a-judge.
-
-        Args:
-            analysis_result: Output from AnalystAgent
-            research_result: Output from ResearcherAgent
-            anomaly_data: Raw anomaly data
-            report_type: Type of report to generate
-
-        Returns:
-            Validated report dict with quality scores
-        """
+        """Generates and validates a report via Tool Use + LLM-as-a-judge."""
         context = self.context_builder.build_reporter_context(
             analysis_result=analysis_result,
             research_result=research_result,
             anomaly_data=anomaly_data,
             report_type=report_type,
         )
-
         system_prompt = REPORTER_SYSTEM_PROMPT.format(domain=self.domain)
         context_text = context.build()
 
@@ -77,16 +145,15 @@ class ReporterAgent:
         for attempt in range(MAX_REGENERATION_ATTEMPTS + 1):
             logger.info(f"ReporterAgent: generating report (attempt {attempt + 1})")
 
-            report = self._generate(system_prompt, context_text)
+            report = self._generate_with_tools(system_prompt, context_text)
             if not report:
                 continue
 
-            # LLM-as-a-judge evaluation
-            evaluation = self._evaluate(report, context_text)
+            evaluation = self._evaluate_with_tools(report, context_text)
             overall_score = evaluation.get("overall", 0.0)
 
             logger.info(
-                f"ReporterAgent: report quality score = {overall_score:.2f} "
+                f"ReporterAgent: quality={overall_score:.2f} "
                 f"(faithfulness={evaluation.get('faithfulness', 0):.2f}, "
                 f"relevance={evaluation.get('relevance', 0):.2f}, "
                 f"completeness={evaluation.get('completeness', 0):.2f})"
@@ -101,13 +168,11 @@ class ReporterAgent:
                 break
 
             if attempt < MAX_REGENERATION_ATTEMPTS:
-                logger.info(
-                    f"ReporterAgent: quality below threshold ({overall_score:.2f} < "
-                    f"{MIN_QUALITY_SCORE}), regenerating"
-                )
-                context_text = self._add_improvement_hints(
-                    context_text, evaluation.get("issues", [])
-                )
+                issues = evaluation.get("issues", [])
+                if issues:
+                    context_text += "\n\nIMPROVEMENT REQUIRED:\n" + "\n".join(
+                        f"- {i}" for i in issues
+                    )
 
         if best_report:
             best_report["_quality_score"] = best_score
@@ -115,30 +180,33 @@ class ReporterAgent:
 
         return best_report or {"error": "Report generation failed", "_quality_score": 0.0}
 
-    def _generate(self, system: str, human: str) -> dict:
-        """Generates a report via LLM."""
+    def _generate_with_tools(self, system: str, human: str) -> dict:
+        """Generates report via Tool Use — no JSON parsing."""
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=2048,
                 temperature=0.1,
                 system=system,
+                tools=[SUBMIT_REPORT_TOOL],
+                tool_choice={"type": "any"},
                 messages=[{"role": "user", "content": human}],
             )
-            content = response.content[0].text.strip()
-            if "```" in content:
-               lines = content.split("\n")
-               lines = [l for l in lines if not l.strip().startswith("```")]
-               content = "\n".join(lines).strip()
-            return json.loads(content)
+            for block in response.content:
+                if block.type == "tool_use" and block.name == "submit_report":
+                    report = dict(block.input)
+                    report["confidence"] = max(0.0, min(1.0, float(report.get("confidence", 0.5))))
+                    logger.debug(f"ReporterAgent: report generated via Tool Use")
+                    return report
+            return {}
         except Exception as e:
-            logger.error(f"Report generation failed: {e}")
+            logger.error(f"ReporterAgent: generation failed: {e}")
             return {}
 
-    def _evaluate(self, report: dict, context: str) -> dict:
-        """Evaluates report quality using LLM-as-a-judge."""
+    def _evaluate_with_tools(self, report: dict, context: str) -> dict:
+        """Evaluates report quality via LLM-as-a-judge using Tool Use."""
         judge_prompt = REPORTER_JUDGE_PROMPT.format(
-            report=json.dumps(report, indent=2),
+            report=json.dumps(report, indent=2, default=str),
             context=context[:3000],
         )
         try:
@@ -146,22 +214,14 @@ class ReporterAgent:
                 model=self.model,
                 max_tokens=512,
                 temperature=0.0,
+                tools=[JUDGE_TOOL],
+                tool_choice={"type": "any"},
                 messages=[{"role": "user", "content": judge_prompt}],
             )
-            content = response.content[0].text.strip()
-            if "```" in content:
-               lines = content.split("\n")
-               lines = [l for l in lines if not l.strip().startswith("```")]
-               content = "\n".join(lines).strip()
-            return json.loads(content)
-            return json.loads(content)
+            for block in response.content:
+                if block.type == "tool_use" and block.name == "submit_evaluation":
+                    return dict(block.input)
+            return {"overall": 0.5, "approved": False, "issues": ["Evaluation failed"]}
         except Exception as e:
-            logger.error(f"Report evaluation failed: {e}")
+            logger.error(f"ReporterAgent: evaluation failed: {e}")
             return {"overall": 0.5, "approved": False, "issues": [str(e)]}
-
-    def _add_improvement_hints(self, context: str, issues: list[str]) -> str:
-        """Adds improvement hints to context for regeneration."""
-        if not issues:
-            return context
-        hints = "\n\nIMPROVEMENT REQUIRED:\n" + "\n".join(f"- {i}" for i in issues)
-        return context + hints
