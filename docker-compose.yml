@@ -59,7 +59,6 @@ services:
     ports:
       - "5000:5000"
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-hybrid_ai_db}
       MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
     volumes:
       - mlflow_artifacts:/mlflow/artifacts
@@ -84,7 +83,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: hybrid_ai_api
     restart: unless-stopped
     ports:
@@ -96,21 +95,47 @@ services:
       QDRANT_HOST: qdrant
       MLFLOW_TRACKING_URI: http://mlflow:5000
     volumes:
-      - ./src:/app/src
-      - ./configs:/app/configs
-      - ./models:/app/models
+      - .:/app
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
       mlflow:
-        condition: service_healthy
+        condition: service_started
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       timeout: 10s
       retries: 5
+    networks:
+      - hybrid_ai_network
+
+  # ── STREAMLIT DASHBOARD ──────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: hybrid_ai_streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    env_file:
+      - configs/.env
+    environment:
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      API_BASE_URL: http://api:8000
+    volumes:
+      - .:/app
+    depends_on:
+      - api
+    command: >
+      streamlit run src/dashboard/app.py
+      --server.port 8501
+      --server.address 0.0.0.0
     networks:
       - hybrid_ai_network
 
@@ -127,29 +152,3 @@ volumes:
 networks:
   hybrid_ai_network:
     driver: bridge
- 
-
-streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: hybrid_ai_streamlit
-    restart: unless-stopped
-    ports:
-      - "8501:8501"
-    env_file:
-      - configs/.env
-    environment:
-      POSTGRES_HOST: postgres
-      QDRANT_HOST: qdrant
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-    volumes:
-      - .:/app
-    depends_on:
-      - api
-    command: >
-      streamlit run src/dashboard/app.py
-      --server.port 8501
-      --server.address 0.0.0.0
-    networks:
-      - hybrid_ai_network
