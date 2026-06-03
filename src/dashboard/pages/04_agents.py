@@ -1,7 +1,8 @@
 """
 src/dashboard/pages/04_agents.py
-Agent execution page — structured result display.
+Agent execution page — with pipeline visualization.
 """
+import plotly.graph_objects as go
 import streamlit as st
 from src.dashboard.components.api_client import run_agent
 
@@ -12,73 +13,89 @@ if "token" not in st.session_state:
     st.stop()
 
 st.title("🤖 LLM Agents")
-st.caption("Trigger agent workflows — results displayed in structured format")
+st.caption("Trigger agent workflows — structured result display")
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("Run Agent")
-
     task = st.selectbox(
         "Task",
         ["feedback", "analyse", "research", "report"],
-        help=(
-            "feedback: full ML↔Agents loop | "
-            "analyse: anomaly analysis only | "
-            "research: RAG search | "
-            "report: generate report"
-        ),
     )
-
     with st.expander("⚙️ Configure Metrics"):
-        rmse = st.slider("RMSE", 0.0, 0.5, 0.18, 0.01,
-                         help="Current model RMSE")
-        consecutive = st.slider("Consecutive Periods", 1, 20, 6,
-                                help="Periods RMSE exceeded threshold")
+        rmse = st.slider("RMSE", 0.0, 0.5, 0.18, 0.01)
+        consecutive = st.slider("Consecutive Periods", 1, 20, 6)
         mae = st.slider("MAE", 0.0, 0.3, 0.12, 0.01)
-        metrics = {
-            "rmse": rmse,
-            "consecutive_periods": consecutive,
-            "mae": mae,
-        }
+        metrics = {"rmse": rmse, "consecutive_periods": consecutive, "mae": mae}
+        will_trigger = rmse > 0.15 and consecutive >= 5
         st.caption(
             f"Threshold: 0.15 | "
-            f"{'🔴 Will trigger' if rmse > 0.15 and consecutive >= 5 else '🟢 Below threshold'}"
+            f"{'🔴 Will trigger FeedbackLoop' if will_trigger else '🟢 Below threshold'}"
         )
-
-    run_clicked = st.button(
-        "▶️ Run Agent",
-        type="primary",
-        use_container_width=True,
-    )
+    run_clicked = st.button("▶️ Run Agent", type="primary", use_container_width=True)
 
 with col2:
-    st.subheader("Agent Pipeline")
-    st.markdown("""
-    ```
-    1. detect_anomaly_type tool
-       → point | contextual | collective | trend
-       ↓
-    2. submit_feedback_suggestion tool
-       → learning_rate | window_size | dropout_rate
-       ↓
-    3. SuggestionValidator
-       → bounds + confidence + justification
-       ↓
-    4. HMAC sign + PostgreSQL persist
-       ↓
-    5. HITL — your validation
-    ```
+    st.subheader("Pipeline Visualization")
 
-    **Security:**
+    # Plotly pipeline diagram
+    steps = [
+        "detect_anomaly_type\n(Tool Use)",
+        "submit_feedback\n(Tool Use)",
+        "SuggestionValidator\n(bounds + confidence)",
+        "HMAC Sign\n(integrity)",
+        "PostgreSQL\n(persist)",
+        "HITL\n(your decision)"
+    ]
+    colors = ["#2196F3", "#2196F3", "#FF9800", "#9C27B0", "#4CAF50", "#F44336"]
+
+    fig = go.Figure()
+    for i, (step, color) in enumerate(zip(steps, colors)):
+        fig.add_trace(go.Scatter(
+            x=[i], y=[0],
+            mode='markers+text',
+            marker=dict(size=40, color=color, symbol='circle'),
+            text=[step],
+            textposition='bottom center',
+            textfont=dict(size=9),
+            hovertemplate=f"{step}<extra></extra>",
+            showlegend=False,
+        ))
+        if i < len(steps) - 1:
+            fig.add_annotation(
+                x=i + 0.5, y=0,
+                ax=i, ay=0,
+                xref="x", yref="y",
+                axref="x", ayref="y",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor="gray",
+                arrowwidth=2,
+            )
+
+    fig.update_layout(
+        height=180,
+        margin=dict(l=20, r=20, t=10, b=60),
+        xaxis=dict(showgrid=False, showticklabels=False, range=[-0.5, len(steps) - 0.5]),
+        yaxis=dict(showgrid=False, showticklabels=False, range=[-0.5, 0.5]),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("""
+    **Security layer:**
     - Data anonymized before Claude
     - HMAC on every suggestion
     - Injection detection on RAG docs
     """)
 
 if run_clicked:
-    with st.spinner(f"Running {task} agent... (~60s with Reflexion disabled)"):
+    progress = st.progress(0, text="Starting agent...")
+    with st.spinner(f"Running {task} agent..."):
+        progress.progress(25, text="Calling Claude API...")
         result = run_agent(task=task, metrics=metrics)
+        progress.progress(100, text="Complete!")
 
     st.divider()
 
@@ -87,46 +104,49 @@ if run_clicked:
         st.success(f"✅ Completed in {latency/1000:.1f}s")
 
         res = result.get("result", {})
-
-        # Show feedback result
         feedback = res.get("feedback_result", {})
+
         if feedback.get("triggered"):
             st.subheader("Feedback Loop Result")
             col_a, col_b = st.columns(2)
-            col_a.metric("Triggered", "Yes")
+            col_a.metric("Triggered", "Yes ✅")
             col_b.metric("Reason", feedback.get("trigger_reason", "N/A"))
 
             suggestions = feedback.get("suggestions", [])
             if suggestions:
                 st.subheader(f"🎯 {len(suggestions)} Suggestion(s) Generated")
+
+                # Confidence chart
+                fig2 = go.Figure(go.Bar(
+                    x=[s.get("hyperparameter") for s in suggestions],
+                    y=[s.get("confidence_score", 0) * 100 for s in suggestions],
+                    marker_color=["#4CAF50" if s.get("confidence_score", 0) >= 0.8
+                                  else "#FF9800" if s.get("confidence_score", 0) >= 0.6
+                                  else "#F44336" for s in suggestions],
+                    text=[f"{s.get('confidence_score', 0):.0%}" for s in suggestions],
+                    textposition='outside',
+                ))
+                fig2.update_layout(
+                    yaxis_title="Confidence (%)",
+                    yaxis_range=[0, 110],
+                    height=200,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
                 for i, s in enumerate(suggestions, 1):
                     pre_validated = s.get("pre_validated", True)
-                    issues = s.get("validation_issues", [])
-                    classification = s.get("anomaly_classification", {})
-
-                    status_icon = "✅" if pre_validated else "⚠️"
                     with st.container(border=True):
                         st.markdown(
-                            f"**{status_icon} Suggestion {i}: "
-                            f"`{s.get('hyperparameter')}`**"
+                            f"**{'✅' if pre_validated else '⚠️'} {i}. "
+                            f"`{s.get('hyperparameter')}`** — "
+                            f"{s.get('current_value')} → {s.get('suggested_value')} "
+                            f"({s.get('confidence_score', 0):.0%})"
                         )
-
-                        if classification:
-                            st.caption(
-                                f"Anomaly: {classification.get('anomaly_type', 'N/A')} | "
-                                f"Severity: {classification.get('severity', 'N/A')}"
-                            )
-
-                        col_x, col_y, col_z = st.columns(3)
-                        col_x.metric("Current", s.get("current_value"))
-                        col_y.metric("Suggested", s.get("suggested_value"))
-                        col_z.metric(
-                            "Confidence",
-                            f"{s.get('confidence_score', 0):.0%}"
-                        )
-
-                        st.caption(f"**Justification:** {s.get('justification', '')}")
-
+                        st.caption(s.get("justification", ""))
+                        issues = s.get("validation_issues", [])
                         if issues:
                             st.warning(f"Validator: {' | '.join(issues)}")
 
@@ -134,7 +154,6 @@ if run_clicked:
             else:
                 st.info("No suggestions generated — RMSE may be below threshold.")
 
-        # Show analysis result
         analysis = res.get("analysis_result", {})
         if analysis.get("suggestions"):
             st.subheader("Analysis Result")
@@ -146,19 +165,6 @@ if run_clicked:
                         f"(confidence: {s.get('confidence_score', 0):.0%})"
                     )
                     st.caption(s.get("justification", ""))
-
-        # Show research result
-        research = res.get("research_result", {})
-        if research:
-            with st.expander("Research Context"):
-                st.write(f"**Strategy:** {research.get('strategy', 'N/A')}")
-                st.write(f"**Confidence:** {research.get('confidence', 0):.2f}")
-                synthesis = research.get("synthesis", {})
-                if isinstance(synthesis, dict):
-                    st.write(synthesis.get("synthesis", ""))
-
     else:
         error = result.get("result", {}).get("error", result.get("error", "Unknown"))
         st.error(f"❌ Failed: {error}")
-        if "ANTHROPIC_API_KEY" in str(error) or "401" in str(error):
-            st.info("Check that ANTHROPIC_API_KEY is set in configs/.env")
