@@ -42,7 +42,10 @@ asyncpg
 psycopg2-binary
 
 # ── MEMORY ────────────────────────────────────────────
-mem0ai
+# mem0ai incompatible avec TensorFlow 2.17 (protobuf conflict)
+# Use in-memory fallback for demo — isolate in microservice for production
+# mem0ai
+protobuf==4.25.3
 
 # ── MLOPS ─────────────────────────────────────────────
 mlflow
@@ -80,4 +83,6 @@ tqdm
 loguru
 tenacity
 aiofiles
-nest_asyncio
+nest_asyncio  
+
+kagglehub
