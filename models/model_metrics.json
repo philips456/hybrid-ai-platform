@@ -1,0 +1,15 @@
+{
+  "model_type": "CNN_LSTM_Attention",
+  "dataset": "Sparkov_CreditCard_2019_2020",
+  "window_size": 10,
+  "n_features": 27,
+  "test_f1": 0.4371,
+  "test_precision": 0.3071,
+  "test_recall": 0.7579,
+  "test_auc_roc": 0.9697,
+  "test_rmse": 0.074,
+  "mlflow_run_id": "0e1b3bd6ac0f40b8bcc769be6dabee73",
+  "paper_ref": "PeerJ_2024_Wu_Chen_CNN_LSTM_Attention",
+  "optimal_threshold": 0.9799999999999995,
+  "test_f1_optimal": 0.6351
+}
